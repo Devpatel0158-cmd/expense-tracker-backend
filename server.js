@@ -4,6 +4,13 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 require('dotenv').config();
 
+// Enhanced startup logging
+console.log('Starting server...');
+console.log('Environment:', process.env.NODE_ENV);
+console.log('Port:', process.env.PORT);
+console.log('Database URL exists:', !!process.env.DATABASE_URL);
+console.log('JWT_SECRET exists:', !!process.env.JWT_SECRET);
+
 const sequelize = require('./config/database');
 
 // Import models
@@ -28,13 +35,20 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:3001', 'http://localhost:5001'],
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://bestestexpensetracker.netlify.app', process.env.FRONTEND_URL] 
+    : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:3001', 'http://localhost:5001'],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', message: 'Server is running' });
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -47,6 +61,7 @@ app.use('/api/dashboard', dashboardRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
+    console.error('Error:', err.message);
     res.status(500).json({
         success: false,
         message: 'Something went wrong!',
@@ -74,26 +89,39 @@ const DEFAULT_CATEGORIES = [
 
 const initializeDatabase = async () => {
     try {
-        await sequelize.authenticate();
+        console.log('Initializing database...');
+        // This is handled in database.js now
         
         try {
+            console.log('Creating enum types if they do not exist...');
             await sequelize.query(`
                 DO $$ BEGIN
-                    CREATE TYPE "public"."enum_categories_type" AS ENUM ('expense', 'income');
+                    CREATE TYPE IF NOT EXISTS "public"."enum_categories_type" AS ENUM ('expense', 'income');
                 EXCEPTION
                     WHEN duplicate_object THEN null;
                 END $$;
             `);
+            console.log('Enum types created or already exist');
         } catch (error) {
+            console.error('Error creating enum types:', error.message);
             // Continue if error
         }
 
         try {
-            await sequelize.sync({ force: true });
+            console.log('Syncing database models...');
+            // Using alter: true instead of force: true for safer schema updates
+            const syncOption = process.env.NODE_ENV === 'production' 
+                ? { alter: true } // For production, just alter tables
+                : { force: true }; // For development, can use force if needed
+            
+            await sequelize.sync(syncOption);
+            console.log('Database sync completed successfully');
         } catch (error) {
+            console.error('Error syncing database:', error.message);
             throw error;
         }
     } catch (error) {
+        console.error('Database initialization failed:', error.message);
         throw error;
     }
 };
@@ -101,6 +129,7 @@ const initializeDatabase = async () => {
 // Function to create default categories for a new user
 const createDefaultCategories = async (userId) => {
     try {
+        console.log(`Creating default categories for user ${userId}`);
         const now = new Date();
         const categories = DEFAULT_CATEGORIES.map(cat => ({
             ...cat,
@@ -110,7 +139,9 @@ const createDefaultCategories = async (userId) => {
         }));
 
         await Category.bulkCreate(categories);
+        console.log('Default categories created successfully');
     } catch (error) {
+        console.error('Error creating default categories:', error.message);
         throw error;
     }
 };
@@ -119,10 +150,13 @@ const startServer = async () => {
     try {
         await initializeDatabase();
         
-        app.listen(PORT, () => {});
+        app.listen(PORT, () => {
+            console.log(`Server running on port ${PORT}`);
+        });
 
         app.locals.createDefaultCategories = createDefaultCategories;
     } catch (error) {
+        console.error('Failed to start server:', error.message);
         process.exit(1);
     }
 };
